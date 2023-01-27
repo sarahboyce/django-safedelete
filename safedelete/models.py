@@ -7,7 +7,7 @@ import django
 from django.contrib.admin.utils import NestedObjects
 from django.core.exceptions import ValidationError
 from django.db import models, router
-from django.db.models import UniqueConstraint
+from django.db.models import UniqueConstraint, sql
 from django.db.models.deletion import ProtectedError
 from django.utils import timezone
 
@@ -241,13 +241,23 @@ class SafeDeleteModel(models.Model):
 
         # update fields (SET, SET_DEFAULT or SET_NULL)
         for model, instances_for_fieldvalues in collector.field_updates.items():
-            for (field, value), instances in instances_for_fieldvalues.items():
-                query = models.sql.UpdateQuery(model)
+            if django.VERSION[0] > 4 or (django.VERSION[0] == 4 and django.VERSION[1] >= 2):
+                # as of 4.2 field_updates values is a list rather than a dictionary
+                (field, value) = model
+                instances_list = instances_for_fieldvalues
+                model = instances_list[0].__class__
+                query = sql.UpdateQuery(model)
                 query.update_batch(
-                    [obj.pk for obj in instances],
-                    {field.name: value},
-                    collector.using,
+                    list({obj.pk for obj in instances_list}), {field.name: value}, collector.using
                 )
+            else:
+                for (field, value), instances in instances_for_fieldvalues.items():
+                    query = models.sql.UpdateQuery(model)
+                    query.update_batch(
+                        [obj.pk for obj in instances],
+                        {field.name: value},
+                        collector.using,
+                    )
 
         return sum(deleted_counter.values()), dict(deleted_counter)
 
